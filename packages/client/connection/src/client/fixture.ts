@@ -38,6 +38,7 @@ import type {
 } from './api.ts'
 import type { RequestPayload, ResponseValue, RpcMethodMap } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { AbstractApiClient, RpcId, SESSION_SEARCH_RESULT_LIMIT } from './api.ts'
+import type { BillingModelUsage } from './api.ts'
 import { randomUuid } from './random-uuid.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
 
@@ -2962,6 +2963,91 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         models: fixtureModelGroups().flatMap(group => group.models.map(model => ({ id: model.id, name: model.name }))),
       }),
     },
+    billing: {
+      balance: request => ok(request, {
+        balance: {
+          available: true,
+          balances: [{ currency: 'CNY', totalBalance: '42.00', grantedBalance: '12.00', toppedUpBalance: '30.00' }],
+        },
+      }),
+      // Fixture parallel of the host aggregation: sum committed assistant
+      // usage since local midnight and price it through one deterministic
+      // fixture table (any `fixture` provider route is priced; others are
+      // unpriced, mirroring the host's unknown-route behavior).
+      todayUsage: (request) => {
+        const since = (() => { const day = new Date(); day.setHours(0, 0, 0, 0); return day.getTime() })()
+        const rows = new Map<string, {
+          provider: string
+          model: string
+          inputTokens: number
+          cacheReadTokens: number
+          cacheWriteTokens: number
+          outputTokens: number
+          spentYuan: number
+        }>()
+        for (const log of logs.values()) {
+          for (const event of log) {
+            if (event.time < since || event.type !== 'assistant/message') continue
+            const { usage, message } = event.data
+            if (usage === undefined) continue
+            const provider = message.source.provider
+            const model = message.source.model
+            const key = `${provider}/${model}`
+            let row = rows.get(key)
+            if (row === undefined) {
+              row = { provider, model, inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, spentYuan: 0 }
+              rows.set(key, row)
+            }
+            row.inputTokens += usage.inputTokens
+            row.cacheReadTokens += usage.cacheReadTokens ?? 0
+            row.cacheWriteTokens += usage.cacheWriteTokens ?? 0
+            row.outputTokens += usage.outputTokens
+            if (provider === 'fixture') {
+              row.spentYuan += (
+                (usage.inputTokens + (usage.cacheWriteTokens ?? 0)) * 1
+                + (usage.cacheReadTokens ?? 0) * 0.1
+                + usage.outputTokens * 2
+              ) / 1_000_000
+            }
+          }
+        }
+        const byModel: BillingModelUsage[] = [...rows.values()].map(row => ({
+          provider: row.provider,
+          model: row.model,
+          inputTokens: row.inputTokens,
+          cacheReadTokens: row.cacheReadTokens,
+          cacheWriteTokens: row.cacheWriteTokens,
+          outputTokens: row.outputTokens,
+          ...(row.spentYuan > 0 ? { spentYuan: row.spentYuan } : {}),
+        }))
+        const tokens = byModel.reduce((total, row) => ({
+          inputTokens: total.inputTokens + row.inputTokens,
+          cacheReadTokens: total.cacheReadTokens + row.cacheReadTokens,
+          cacheWriteTokens: total.cacheWriteTokens + row.cacheWriteTokens,
+          outputTokens: total.outputTokens + row.outputTokens,
+        }), { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 })
+        const spentYuan = byModel.reduce((sum, row) => sum + (row.spentYuan ?? 0), 0)
+        return ok(request, {
+          usage: {
+            since,
+            spentYuan,
+            tokens,
+            byModel,
+            unpriced: byModel.some(row => row.spentYuan === undefined),
+          },
+        })
+      },
+      // Fixture-only OpenCode Go quota: a fixed, plausible plan state so the
+      // GO pill has something to render in fixture mode without a network call.
+      goUsage: request => ok(request, {
+        usage: {
+          rolling: { status: 'ok', percent: 0, resetsAt: new Date(Date.now() + 5 * 3_600_000).toISOString() },
+          weekly: { status: 'ok', percent: 3, resetsAt: new Date(Date.now() + 3 * 86_400_000).toISOString() },
+          monthly: { status: 'ok', percent: 1, resetsAt: new Date(Date.now() + 29 * 86_400_000).toISOString() },
+          tokens: { inputTokens: 1_204_454, cacheReadTokens: 61_009_792, cacheWriteTokens: 0, outputTokens: 200_840 },
+        },
+      }),
+    },
     respond(message: ClientResponse): Promise<RpcReceipt> {
       // Same routing discipline as the host: rpcId first, then the payload's
       // audit correlation; a settled or unknown id is not-pending.
@@ -3129,6 +3215,9 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'llm.providers': return this.api.llm.providers(request)
       case 'llm.models': return this.api.llm.models(request)
       case 'llm.discoverModels': return this.api.llm.discoverModels(request, signal)
+      case 'billing.balance': return this.api.billing.balance(request, signal)
+      case 'billing.todayUsage': return this.api.billing.todayUsage(request, signal)
+      case 'billing.goUsage': return this.api.billing.goUsage(request, signal)
     }
   }
 

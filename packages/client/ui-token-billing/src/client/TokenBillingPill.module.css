@@ -1,0 +1,41 @@
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: var(--dsw-alias-fill-l2);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.pill:hover,
+.pill:focus-visible {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l3);
+}
+
+.segment {
+  white-space: nowrap;
+}
+
+.separator {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.refresh {
+  flex: none;
+  opacity: 0.6;
+  transition: opacity 120ms ease;
+}
+
+.pill:hover .refresh,
+.pill:focus-visible .refresh {
+  opacity: 1;
+}

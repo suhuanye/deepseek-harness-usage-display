@@ -14,7 +14,7 @@ import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, MessageSource, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
 import type { JsonValue, Session, SessionEvent, SessionEventMap, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
@@ -36,7 +36,8 @@ import {
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {
-  ApiProxy, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
+  ApiProxy, BalanceInfo, BillingBalance, BillingGoUsage, BillingGoWindow, BillingModelUsage, BillingTodayUsage, BillingTokenUsage,
+  ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
   ModelCatalogFailure, ModelProviderGroup,
   ModelReasoning, MuxFrame, PromptContentPart, QuestionResponsePayload, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem,
   QueuedInboxItem, SessionSummary, SettingsNamespaceView, SubagentAddress, JobView, ToolEventView,
@@ -381,6 +382,355 @@ function err<T>(request: RpcRequest<unknown>, error: RpcError): RpcResponse<T> {
   return { rpcId: request.rpcId, result: { ok: false, error } }
 }
 
+// ── billing domain ──────────────────────────────────────────────────────────
+// Account balance and same-day spend are provider-owned facts with no durable
+// host record: the balance is fetched live from the configured route's
+// endpoint, and same-day usage is re-derived from committed session logs each
+// query. The domain is hosted entirely on the host side — the browser never
+// sees an API key — and answers `undefined` balance whenever the deployment
+// has no key or no DeepSeek-compatible endpoint, which is a configuration
+// fact rather than an error.
+
+/** One model route's price in CNY per one million tokens. */
+export interface BillingModelPrice {
+  /** Provider route the price applies to (`deepseek-official`, …). */
+  provider: string
+  /** Provider-owned model id the price applies to. */
+  model: string
+  /** CNY per 1M uncached input tokens (cache writes bill at this rate too). */
+  inputCacheMissPerMillion: number
+  /** CNY per 1M cache-hit input tokens. */
+  inputCacheHitPerMillion: number
+  /** CNY per 1M output tokens. */
+  outputPerMillion: number
+}
+
+/**
+ * Default price table for the DeepSeek official route (CNY per million
+ * tokens), from the provider's published pricing page. `deepseek-v4-flash` and
+ * `deepseek-v4-pro` are the current catalog; `deepseek-chat` and
+ * `deepseek-reasoner` cover older sessions. DeepSeek announced peak/off-peak
+ * pricing effective 2026-08-17; deployments on the new rates override these
+ * through `billingPrices` config, and any other provider/model route is
+ * unpriced by default (the surface then shows its token counts without a yuan
+ * figure).
+ */
+export const DEFAULT_BILLING_PRICES: readonly BillingModelPrice[] = [
+  { provider: 'deepseek-official', model: 'deepseek-v4-flash', inputCacheMissPerMillion: 1, inputCacheHitPerMillion: 0.02, outputPerMillion: 2 },
+  { provider: 'deepseek-official', model: 'deepseek-v4-pro', inputCacheMissPerMillion: 3, inputCacheHitPerMillion: 0.025, outputPerMillion: 6 },
+  { provider: 'deepseek-official', model: 'deepseek-chat', inputCacheMissPerMillion: 2, inputCacheHitPerMillion: 0.5, outputPerMillion: 8 },
+  { provider: 'deepseek-official', model: 'deepseek-reasoner', inputCacheMissPerMillion: 4, inputCacheHitPerMillion: 1, outputPerMillion: 16 },
+]
+
+/** Index a price table by its `provider/model` key. */
+function billingPriceTable(prices: readonly BillingModelPrice[]): ReadonlyMap<string, BillingModelPrice> {
+  const table = new Map<string, BillingModelPrice>()
+  for (const price of prices) table.set(`${price.provider}/${price.model}`, price)
+  return table
+}
+
+/** Epoch-ms of local midnight for the "today" window containing `now`. */
+function startOfLocalDay(now: number): number {
+  const date = new Date(now)
+  date.setHours(0, 0, 0, 0)
+  return date.getTime()
+}
+
+/** One provider-reported usage sample read from a committed session event. */
+interface BillingUsageSample {
+  time: number
+  provider: string
+  model: string
+  usage: TokenUsage
+}
+
+/**
+ * Read the provider usage of one event, or undefined when it carries none.
+ * Only `assistant/message` events carry final per-step usage (the token-meter
+ * rule: the final message usage replaces any chunk sample for the same step),
+ * so counting exactly this event type never double-counts a step.
+ */
+function billingUsageOf(event: SessionEvent): BillingUsageSample | undefined {
+  if (event.type !== 'assistant/message') return undefined
+  const { usage, message } = event.data
+  if (usage === undefined) return undefined
+  return {
+    time: event.time,
+    provider: message.source.provider,
+    model: message.source.model,
+    usage,
+  }
+}
+
+/** CN-cost of one sample under the price table, or undefined when the route is unpriced. */
+function billingCostOf(
+  sample: BillingUsageSample,
+  prices: ReadonlyMap<string, BillingModelPrice>,
+): number | undefined {
+  const price = prices.get(`${sample.provider}/${sample.model}`)
+  if (price === undefined) return undefined
+  const { usage } = sample
+  return (
+    (usage.inputTokens + (usage.cacheWriteTokens ?? 0)) * price.inputCacheMissPerMillion
+    + (usage.cacheReadTokens ?? 0) * price.inputCacheHitPerMillion
+    + usage.outputTokens * price.outputPerMillion
+  ) / 1_000_000
+}
+
+/** Aggregate every committed usage event at or after `since` across all sessions. */
+async function aggregateTodayUsage(
+  ctx: Context,
+  since: number,
+  prices: ReadonlyMap<string, BillingModelPrice>,
+  signal?: AbortSignal,
+): Promise<BillingTodayUsage> {
+  const byModel = new Map<string, BillingModelUsage>()
+  const addSample = (sample: BillingUsageSample): void => {
+    const key = `${sample.provider}/${sample.model}`
+    let row = byModel.get(key)
+    if (row === undefined) {
+      row = {
+        provider: sample.provider,
+        model: sample.model,
+        inputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        outputTokens: 0,
+      }
+      byModel.set(key, row)
+    }
+    const { usage } = sample
+    row.inputTokens += usage.inputTokens
+    row.cacheReadTokens += usage.cacheReadTokens ?? 0
+    row.cacheWriteTokens += usage.cacheWriteTokens ?? 0
+    row.outputTokens += usage.outputTokens
+    const cost = billingCostOf(sample, prices)
+    if (cost !== undefined) row.spentYuan = (row.spentYuan ?? 0) + cost
+  }
+  const scanEvents = (events: readonly SessionEvent[]): void => {
+    for (const event of events) {
+      if (event.time < since) continue
+      const sample = billingUsageOf(event)
+      if (sample !== undefined) addSample(sample)
+    }
+  }
+
+  const attached = ctx.sessions.list()
+  for (const session of attached) scanEvents(session.events)
+  const attachedIds = new Set(attached.map(session => session.id))
+  const persistence = ctx.get('sessionPersistence')
+  if (persistence !== undefined) {
+    const metas = await persistence.list(signal)
+    signal?.throwIfAborted()
+    for (const meta of metas) {
+      if (attachedIds.has(meta.id)) continue
+      // A corrupt or oversized cold artifact must not fail the whole query:
+      // the attached window still answers, and the failure is logged once.
+      try {
+        const read = await persistence.readFrom(meta.id, 0, signal)
+        signal?.throwIfAborted()
+        scanEvents(read.events)
+      } catch (error) {
+        if (signal?.aborted) throw error
+        ctx.logger.warn(`billing: skipping session "${meta.id}" while aggregating today's usage: ${String(error)}`)
+      }
+    }
+  }
+
+  const rows = [...byModel.values()]
+  const tokens: BillingTokenUsage = {
+    inputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+  }
+  let spentYuan = 0
+  let unpriced = false
+  for (const row of rows) {
+    tokens.inputTokens += row.inputTokens
+    tokens.cacheReadTokens += row.cacheReadTokens
+    tokens.cacheWriteTokens += row.cacheWriteTokens
+    tokens.outputTokens += row.outputTokens
+    if (row.spentYuan !== undefined) {
+      spentYuan += row.spentYuan
+    } else {
+      unpriced = true
+    }
+  }
+  return { since, spentYuan, tokens, byModel: rows, unpriced }
+}
+
+/**
+ * Resolve the DeepSeek route's endpoint and key for a balance query, or
+ * undefined when the deployment has none configured. The endpoint comes from
+ * the `llm-deepseek` settings section, then `DEEPSEEK_BASE_URL`, then the
+ * public API; the key resolves through the credentials seam.
+ */
+async function resolveBillingConnection(
+  ctx: Context,
+): Promise<{ baseURL: string; apiKey: string } | undefined> {
+  const settings = ctx.get('settings')
+  let baseURL: string | undefined
+  let apiKeyEnv = 'DEEPSEEK_API_KEY'
+  if (settings !== undefined) {
+    const section = settings.get(settingsNamespace('llm-deepseek')) as
+      | { baseURL?: unknown; apiKeyEnv?: unknown }
+      | undefined
+    if (section !== undefined) {
+      if (typeof section.baseURL === 'string' && section.baseURL.length > 0) baseURL = section.baseURL
+      if (typeof section.apiKeyEnv === 'string' && section.apiKeyEnv.length > 0) apiKeyEnv = section.apiKeyEnv
+    }
+  }
+  baseURL ??= process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'
+  const credentials = ctx.get('credentials')
+  if (credentials === undefined) return undefined
+  const resolved = await credentials.resolve(credentialRef(apiKeyEnv))
+  if (resolved === undefined || resolved.value.length === 0) return undefined
+  return { baseURL, apiKey: resolved.value }
+}
+
+/** Map a DeepSeek `/user/balance` answer onto the wire view; malformed bodies answer undefined. */
+function parseBalanceBody(body: unknown): BillingBalance | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const { is_available, balance_infos } = body as { is_available?: unknown; balance_infos?: unknown }
+  if (!Array.isArray(balance_infos)) return undefined
+  const balances: BalanceInfo[] = []
+  for (const item of balance_infos) {
+    if (typeof item !== 'object' || item === null) return undefined
+    const { currency, total_balance, granted_balance, topped_up_balance } = item as Record<string, unknown>
+    if (typeof currency !== 'string' || typeof total_balance !== 'string'
+      || typeof granted_balance !== 'string' || typeof topped_up_balance !== 'string') {
+      return undefined
+    }
+    balances.push({
+      currency,
+      totalBalance: total_balance,
+      grantedBalance: granted_balance,
+      toppedUpBalance: topped_up_balance,
+    })
+  }
+  return { available: is_available === true, balances }
+}
+
+/**
+ * Query the configured provider's balance endpoint. Absent configuration and
+ * every failure (transport, non-2xx, malformed body) answer undefined — a
+ * surface showing a balance pill degrades to a dash, never to an error modal.
+ */
+async function queryBillingBalance(ctx: Context, signal?: AbortSignal): Promise<BillingBalance | undefined> {
+  const connection = await resolveBillingConnection(ctx)
+  if (connection === undefined) return undefined
+  let response: Response
+  try {
+    response = await fetch(`${connection.baseURL}/user/balance`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${connection.apiKey}` },
+      // Credential-bearing provider request: a redirect must fail rather than
+      // forward the key to another origin (packages/web policy).
+      redirect: 'error',
+      ...signal === undefined ? {} : { signal },
+    })
+  } catch (error) {
+    if (signal?.aborted) throw error
+    ctx.logger.warn(`billing: balance query to ${connection.baseURL} failed: ${String(error)}`)
+    return undefined
+  }
+  if (!response.ok) {
+    ctx.logger.warn(`billing: balance query to ${connection.baseURL} failed: HTTP ${response.status}`)
+    return undefined
+  }
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch (error) {
+    ctx.logger.warn(`billing: balance answer from ${connection.baseURL} was not JSON: ${String(error)}`)
+    return undefined
+  }
+  return parseBalanceBody(body)
+}
+
+/** Default credential reference for the OpenCode Go subscription key. */
+export const DEFAULT_GO_API_KEY_ENV = 'OPENCODE_GO_API_KEY'
+/** Public OpenCode Go quota endpoint (the plan's official `/v1/usage` API). */
+export const GO_USAGE_BASE_URL = 'https://opencode.ai/zen/go'
+/** The llm-pi-ai provider route id that serves the OpenCode Go plan. */
+export const GO_PROVIDER = 'opencode-go'
+
+/** Map one OpenCode Go quota window, or undefined when it is malformed or degraded. */
+function parseGoWindow(value: unknown): BillingGoWindow | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const { status, percent, resetsAt } = value as Record<string, unknown>
+  if (typeof status !== 'string' || typeof percent !== 'number'
+    || typeof resetsAt !== 'string' || status !== 'ok' || !Number.isFinite(percent)) {
+    return undefined
+  }
+  return { status, percent, resetsAt }
+}
+
+/** Map an OpenCode Go `/v1/usage` answer onto the wire view; malformed bodies answer undefined. */
+function parseGoUsageBody(body: unknown): BillingGoUsage | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const usage = (body as { usage?: unknown }).usage
+  if (typeof usage !== 'object' || usage === null) return undefined
+  const { rolling, weekly, monthly } = usage as Record<string, unknown>
+  const parsed: BillingGoUsage = {}
+  const rollingWindow = parseGoWindow(rolling)
+  if (rollingWindow !== undefined) parsed.rolling = rollingWindow
+  const weeklyWindow = parseGoWindow(weekly)
+  if (weeklyWindow !== undefined) parsed.weekly = weeklyWindow
+  const monthlyWindow = parseGoWindow(monthly)
+  if (monthlyWindow !== undefined) parsed.monthly = monthlyWindow
+  // At least one usable window, otherwise the answer is not a Go quota.
+  return parsed.rolling !== undefined || parsed.weekly !== undefined || parsed.monthly !== undefined
+    ? parsed
+    : undefined
+}
+
+/**
+ * Query the OpenCode Go subscription quota (`/v1/usage`). The key resolves
+ * from the credentials seam through {@link DEFAULT_GO_API_KEY_ENV} (or the
+ * deployment's override). Absent configuration and every failure (transport,
+ * non-2xx, malformed body) answer undefined — a surface showing a GO pill
+ * renders nothing for it rather than an error.
+ */
+async function queryGoUsage(
+  ctx: Context,
+  apiKeyEnv: string,
+  signal?: AbortSignal,
+): Promise<BillingGoUsage | undefined> {
+  const credentials = ctx.get('credentials')
+  if (credentials === undefined) return undefined
+  const resolved = await credentials.resolve(credentialRef(apiKeyEnv))
+  if (resolved === undefined || resolved.value.length === 0) return undefined
+  let response: Response
+  try {
+    response = await fetch(`${GO_USAGE_BASE_URL}/v1/usage`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${resolved.value}` },
+      // Credential-bearing provider request: a redirect must fail rather than
+      // forward the key to another origin (packages/web policy).
+      redirect: 'error',
+      ...signal === undefined ? {} : { signal },
+    })
+  } catch (error) {
+    if (signal?.aborted) throw error
+    ctx.logger.warn(`billing: OpenCode Go usage query failed: ${String(error)}`)
+    return undefined
+  }
+  if (!response.ok) {
+    ctx.logger.warn(`billing: OpenCode Go usage query failed: HTTP ${response.status}`)
+    return undefined
+  }
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch (error) {
+    ctx.logger.warn(`billing: OpenCode Go usage answer was not JSON: ${String(error)}`)
+    return undefined
+  }
+  return parseGoUsageBody(body)
+}
+
 /**
  * The RPC refusal a preset failure becomes, or undefined when the failure is
  * about something else.
@@ -667,6 +1017,18 @@ export interface ApiProxyDefaults {
    * falls back to platform detection ({@link canOpenNativePath}).
    */
   canOpenPath?: () => boolean
+  /**
+   * Per-model CNY prices for the billing domain's same-day spend figure.
+   * Absent, {@link DEFAULT_BILLING_PRICES} applies; a route without an entry
+   * contributes tokens but no yuan, flagged through `unpriced`.
+   */
+  billingPrices?: readonly BillingModelPrice[]
+  /**
+   * Credential reference (environment-variable name) for the OpenCode Go
+   * subscription key queried by `billing.goUsage`. Defaults to
+   * {@link DEFAULT_GO_API_KEY_ENV}.
+   */
+  goApiKeyEnv?: string
 }
 
 /** The tool/call payload fields the presenter path reads. */
@@ -1108,6 +1470,8 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     ?? DEFAULT_SESSION_LOG_COMPRESSION_LEVEL
   const coldBlankProbeMaxBytes = defaults.coldBlankProbeMaxBytes
     ?? DEFAULT_COLD_BLANK_PROBE_MAX_BYTES
+  const billingPrices = defaults.billingPrices ?? DEFAULT_BILLING_PRICES
+  const goApiKeyEnv = defaults.goApiKeyEnv ?? DEFAULT_GO_API_KEY_ENV
   /** The seed model each create/resume declares; re-read so it never goes stale. */
   const agentOptions = (): AgentOptions => {
     const { provider, model } = defaults.defaultModelSelection()
@@ -3423,6 +3787,69 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             details: { settingsNs, ...baseURL === undefined ? {} : { baseURL } },
           })
         }
+      },
+    },
+
+    billing: {
+      async balance(request, signal) {
+        const balance = await queryBillingBalance(ctx, signal)
+        return ok(request, balance === undefined ? {} : { balance })
+      },
+
+      async todayUsage(request, signal) {
+        try {
+          const usage = await aggregateTodayUsage(
+            ctx,
+            startOfLocalDay(Date.now()),
+            billingPriceTable(billingPrices),
+            signal,
+          )
+          return ok(request, { usage })
+        } catch (error: unknown) {
+          if (signal !== undefined && isAborted(signal)) {
+            return err(request, {
+              code: 'cancelled',
+              message: 'billing usage aggregation was aborted',
+              details: {},
+            })
+          }
+          return err(request, {
+            code: 'internal',
+            message: `billing usage aggregation failed: ${error instanceof Error ? error.message : String(error)}`,
+            details: {},
+          })
+        }
+      },
+
+      async goUsage(request, signal) {
+        // Plan windows need the GO key; the dsh-tracked token figure does not,
+        // so each side stays answerable independently.
+        const plan = await queryGoUsage(ctx, goApiKeyEnv, signal)
+        const usage: BillingGoUsage = { ...plan }
+        try {
+          const today = await aggregateTodayUsage(
+            ctx,
+            startOfLocalDay(Date.now()),
+            billingPriceTable(billingPrices),
+            signal,
+          )
+          const goRows = today.byModel.filter(row => row.provider === GO_PROVIDER)
+          if (goRows.length > 0) {
+            usage.tokens = goRows.reduce((total, row) => ({
+              inputTokens: total.inputTokens + row.inputTokens,
+              cacheReadTokens: total.cacheReadTokens + row.cacheReadTokens,
+              cacheWriteTokens: total.cacheWriteTokens + row.cacheWriteTokens,
+              outputTokens: total.outputTokens + row.outputTokens,
+            }), { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 })
+          }
+        } catch (error) {
+          // The plan windows remain answerable; a failed log scan just omits tokens.
+          if (signal !== undefined && isAborted(signal)) throw error
+          ctx.logger.warn(`billing: OpenCode Go token aggregation failed: ${String(error)}`)
+        }
+        const hasAny = usage.rolling !== undefined || usage.weekly !== undefined
+          || usage.monthly !== undefined || usage.tokens !== undefined
+        return ok(request, hasAny ? { usage } : {})
       },
     },
 

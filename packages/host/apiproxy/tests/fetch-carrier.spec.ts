@@ -282,6 +282,31 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
         return { rpcId: request.rpcId, result: { ok: true, value: { models: [] } } }
       },
     },
+    billing: {
+      async balance(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: {} } }
+      },
+      async todayUsage(request) {
+        return {
+          rpcId: request.rpcId,
+          result: {
+            ok: true,
+            value: {
+              usage: {
+                since: 0,
+                spentYuan: 0,
+                tokens: { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 },
+                byModel: [],
+                unpriced: false,
+              },
+            },
+          },
+        }
+      },
+      async goUsage(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: {} } }
+      },
+    },
     events: {
       mux: (_request, signal) => stream(muxFrames, signal),
       host: (_request, signal) => stream(hostFrames, signal),

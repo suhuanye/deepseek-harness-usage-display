@@ -16,7 +16,10 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type { ApiProxy } from './api/index.ts'
-import { createApiProxy, DEFAULT_COLD_BLANK_PROBE_MAX_BYTES } from './api-proxy.ts'
+import {
+  createApiProxy, DEFAULT_COLD_BLANK_PROBE_MAX_BYTES,
+  type BillingModelPrice,
+} from './api-proxy.ts'
 import {
   DEFAULT_SESSION_LOG_COMPRESSION_LEVEL,
   type SessionLogCompressionLevel,
@@ -29,6 +32,8 @@ export { AbstractApiClient, InProcessApiClient } from './fetch/client.ts'
 export type { IApiClient } from './fetch/client.ts'
 export { createApiProxy } from './api-proxy.ts'
 export type { ApiProxyDefaults } from './api-proxy.ts'
+export { DEFAULT_BILLING_PRICES, DEFAULT_GO_API_KEY_ENV } from './api-proxy.ts'
+export type { BillingModelPrice } from './api-proxy.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -59,6 +64,18 @@ export interface Config {
    * @default 1024
    */
   coldBlankProbeMaxBytes?: number
+  /**
+   * Per-model CNY prices for the billing domain's same-day spend figure.
+   * Absent, {@link DEFAULT_BILLING_PRICES} applies; a route without an entry
+   * contributes tokens but no yuan, flagged through `unpriced`.
+   */
+  billingPrices?: BillingModelPrice[]
+  /**
+   * Credential reference (environment-variable name) for the OpenCode Go
+   * subscription key queried by `billing.goUsage`. Defaults to
+   * {@link DEFAULT_GO_API_KEY_ENV}.
+   */
+  goApiKeyEnv?: string
 }
 
 /**
@@ -77,6 +94,14 @@ export class ApiProxyService extends Service implements ApiProxy {
     sessionExportCompressionLevel: z.number().step(1).min(0).max(9)
       .default(DEFAULT_SESSION_LOG_COMPRESSION_LEVEL) as z<SessionLogCompressionLevel>,
     coldBlankProbeMaxBytes: z.natural().default(DEFAULT_COLD_BLANK_PROBE_MAX_BYTES),
+    billingPrices: z.array(z.object({
+      provider: z.string().required(),
+      model: z.string().required(),
+      inputCacheMissPerMillion: z.number().min(0),
+      inputCacheHitPerMillion: z.number().min(0),
+      outputPerMillion: z.number().min(0),
+    })),
+    goApiKeyEnv: z.string().role('credential-ref'),
   })
 
   readonly sessions: ApiProxy['sessions']
@@ -89,6 +114,7 @@ export class ApiProxyService extends Service implements ApiProxy {
   readonly settings: ApiProxy['settings']
   readonly credentials: ApiProxy['credentials']
   readonly llm: ApiProxy['llm']
+  readonly billing: ApiProxy['billing']
   readonly events: ApiProxy['events']
   readonly downloads: ApiProxy['downloads']
   readonly respond: ApiProxy['respond']
@@ -106,6 +132,10 @@ export class ApiProxyService extends Service implements ApiProxy {
       ...(config.coldBlankProbeMaxBytes === undefined
         ? {}
         : { coldBlankProbeMaxBytes: config.coldBlankProbeMaxBytes }),
+      ...(config.billingPrices === undefined || config.billingPrices.length === 0
+        ? {}
+        : { billingPrices: config.billingPrices }),
+      ...(config.goApiKeyEnv === undefined ? {} : { goApiKeyEnv: config.goApiKeyEnv }),
     })
     this.sessions = api.sessions
     this.subagents = api.subagents
@@ -117,6 +147,7 @@ export class ApiProxyService extends Service implements ApiProxy {
     this.settings = api.settings
     this.credentials = api.credentials
     this.llm = api.llm
+    this.billing = api.billing
     this.events = api.events
     this.downloads = api.downloads
     // createApiProxy returns closures (no `this` capture), so the bind is
