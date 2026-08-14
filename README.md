@@ -1,5 +1,7 @@
 # DeepSeek Harness
 
+> **This fork includes the ui-token-usage usage display plugin (用量显示插件)**: a session-header usage display plugin showing today's token usage and spend, the account balance, and the OpenCode Go quota. Find it under `packages/client/ui-token-usage/`.
+
 English | [中文](README.zh.md)
 
 DeepSeek Harness (`dsh`) is an open-source agent harness developed by [DeepSeek AI](https://deepseek.com).

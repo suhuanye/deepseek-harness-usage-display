@@ -1,5 +1,7 @@
 # DeepSeek Harness
 
+> **本 fork 包含用量显示插件（ui-token-usage）**：在会话头部显示今日 token 用量与计价花费、账户余额，以及 OpenCode Go 套餐用量。代码位于 `packages/client/ui-token-usage/`。
+
 [English](README.md) | 中文
 
 DeepSeek Harness（`dsh`）是由 [DeepSeek AI](https://deepseek.com) 开发的开源 agent harness（智能体框架）。
