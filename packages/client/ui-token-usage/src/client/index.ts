@@ -9,18 +9,18 @@
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { BillingGoUsage, ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { en, NS, zh, type TokenBillingKey } from './locales.ts'
-import { TokenBillingPill, type TokenBillingInjected, type TokenBillingSnapshot } from './TokenBillingPill.tsx'
+import { en, NS, zh, type TokenUsageKey } from './locales.ts'
+import { TokenUsagePill, type TokenUsageInjected, type TokenUsageSnapshot } from './TokenUsagePill.tsx'
 import { GoUsagePill, type GoUsageInjected } from './GoUsagePill.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Token-billing readout copy. */
-    'token-billing': TokenBillingKey
+    'token-usage': TokenUsageKey
   }
 }
 
-export type { TokenBillingInjected, TokenBillingPillProps, TokenBillingSnapshot } from './TokenBillingPill.tsx'
+export type { TokenUsageInjected, TokenUsagePillProps, TokenUsageSnapshot } from './TokenUsagePill.tsx'
 export type { GoUsageInjected, GoUsagePillProps } from './GoUsagePill.tsx'
 
 /** Required services for locale registration and header-slot contribution. */
@@ -31,20 +31,20 @@ export const inject = ['connection', 'sessions', 'slots', 'locale']
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-token-billing: dictionaries')
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-token-usage: dictionaries')
 
   // Today's spend + balance pill.
   ctx.slots.inject(
     'conversation.session.header.utilities',
     () => ctx.slots.register({
       name: 'conversation.session.header.utilities',
-      id: 'token-billing',
+      id: 'token-usage',
       order: 10,
       locale: NS,
-      inject: (): TokenBillingInjected => {
+      inject: (): TokenUsageInjected => {
         const api = (ctx.get('connection') as ConnectionHandle).api
         return {
-          refresh: async (): Promise<TokenBillingSnapshot> => {
+          refresh: async (): Promise<TokenUsageSnapshot> => {
             // The two figures are independent: a balance the deployment cannot
             // answer must not hide today's usage, and vice versa.
             const [balance, usage] = await Promise.allSettled([
@@ -62,7 +62,7 @@ export function apply(ctx: ClientContext): void {
           },
         }
       },
-    }, TokenBillingPill),
+    }, TokenUsagePill),
   )
 
   // OpenCode Go subscription quota pill.

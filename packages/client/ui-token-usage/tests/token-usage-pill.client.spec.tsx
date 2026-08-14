@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// TokenBillingPill behavior: nothing renders before the first answer, the
+// TokenUsagePill behavior: nothing renders before the first answer, the
 // pill then shows today's priced spend and the CNY balance (or a dash when
 // the deployment exposes none), and it re-fetches on click and on the quiet
 // refresh timer.
@@ -8,7 +8,7 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import type { BillingBalance, BillingTodayUsage } from '@deepseek-ai/dsh-client-connection/client'
 import { en, zh, NS } from '../src/client/locales.ts'
-import { TokenBillingPill, type TokenBillingInjected } from '../src/client/TokenBillingPill.tsx'
+import { TokenUsagePill, type TokenUsageInjected } from '../src/client/TokenUsagePill.tsx'
 
 afterEach(() => {
   cleanup()
@@ -33,17 +33,17 @@ const USAGE: BillingTodayUsage = {
   unpriced: false,
 }
 
-function mount(refresh: TokenBillingInjected['refresh']) {
+function mount(refresh: TokenUsageInjected['refresh']) {
   const props = {
     t,
     refresh,
     // Runtime share members the component never reads; only the injected
     // face and the locale seat matter to this spec.
-  } as unknown as Parameters<typeof TokenBillingPill>[0]
-  return render(<TokenBillingPill {...props} />)
+  } as unknown as Parameters<typeof TokenUsagePill>[0]
+  return render(<TokenUsagePill {...props} />)
 }
 
-describe('TokenBillingPill', () => {
+describe('TokenUsagePill', () => {
   it('renders nothing before the first answer and the pill after it', async () => {
     let resolve!: (value: { balance: BillingBalance | undefined; usage: BillingTodayUsage | undefined }) => void
     const refresh = vi.fn(
@@ -107,6 +107,6 @@ describe('TokenBillingPill', () => {
 
   it('keeps the English dictionary key-identical to the Chinese source of truth', () => {
     expect(Object.keys(en).sort()).toEqual(Object.keys(zh).sort())
-    expect(NS).toBe('token-billing')
+    expect(NS).toBe('token-usage')
   })
 })

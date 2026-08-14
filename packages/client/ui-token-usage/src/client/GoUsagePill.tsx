@@ -12,7 +12,7 @@ import type { BillingGoUsage, BillingTokenUsage } from '@deepseek-ai/dsh-client-
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { NS } from './locales.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import css from './TokenBillingPill.module.css'
+import css from './TokenUsagePill.module.css'
 
 /** Business face injected into the GO pill: a single refresh trigger. */
 export interface GoUsageInjected {

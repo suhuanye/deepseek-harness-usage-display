@@ -1,16 +1,16 @@
 /**
- * Package-owned invariant companion for `@deepseek-ai/dsh-client-ui-token-billing`.
- * @module @deepseek-ai/dsh-client-ui-token-billing/invariant
+ * Package-owned invariant companion for `@deepseek-ai/dsh-client-ui-token-usage`.
+ * @module @deepseek-ai/dsh-client-ui-token-usage/invariant
  */
 
 /* jscpd:ignore-start */
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
-const PACKAGE_NAME = '@deepseek-ai/dsh-client-ui-token-billing'
+const PACKAGE_NAME = '@deepseek-ai/dsh-client-ui-token-usage'
 
 /** Cordis companion plugin name. */
-export const name = 'client-ui-token-billing-invariant'
+export const name = 'client-ui-token-usage-invariant'
 /** Service required before the companion can reserve package ownership. */
 export const inject = ['invariants']
 

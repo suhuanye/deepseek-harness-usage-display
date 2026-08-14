@@ -1,5 +1,5 @@
 /**
- * ui-token-billing plugin halves: the browser entry's dictionary and
+ * ui-token-usage plugin halves: the browser entry's dictionary and
  * header-utility registrations against the real SlotRegistry (with fiber
  * teardown proving removal — HMR safety), the inert node entry, and the
  * invariant companion's ownership reservation.
@@ -12,7 +12,7 @@ import { stubSettingsScope } from '@deepseek-ai/dsh-client-test-runtime'
 import { apply as applyLocale, inject as localeInject } from '@deepseek-ai/dsh-client-locale/client'
 import { apply, inject } from '../src/client/index.ts'
 import { apply as applyNode } from '../src/index.ts'
-import * as TokenBillingInvariant from '../src/invariant.ts'
+import * as TokenUsageInvariant from '../src/invariant.ts'
 import { en, NS, zh } from '../src/client/locales.ts'
 
 /** Slot ledger reader: entry ids currently registered in the header utilities list. */
@@ -64,17 +64,17 @@ async function bench(): Promise<{ ctx: Context; fiber: ReturnType<Context['plugi
   return { ctx, fiber }
 }
 
-describe('ui-token-billing browser half', () => {
+describe('ui-token-usage browser half', () => {
   it('declares the services it binds', () => {
     expect(inject).toEqual(['connection', 'sessions', 'slots', 'locale'])
   })
 
   it('registers both header utilities, and fiber teardown removes them (HMR safety)', async () => {
     const { ctx, fiber } = await bench()
-    expect(utilityEntryIds(ctx)).toContain('token-billing')
+    expect(utilityEntryIds(ctx)).toContain('token-usage')
     expect(utilityEntryIds(ctx)).toContain('opencode-go')
     await fiber.dispose()
-    expect(utilityEntryIds(ctx)).not.toContain('token-billing')
+    expect(utilityEntryIds(ctx)).not.toContain('token-usage')
     expect(utilityEntryIds(ctx)).not.toContain('opencode-go')
   })
 
@@ -95,21 +95,21 @@ describe('ui-token-billing browser half', () => {
   })
 })
 
-describe('ui-token-billing node half', () => {
+describe('ui-token-usage node half', () => {
   it('contributes no host behavior', () => {
     // The node half exists only so the plugin appears in the Loader tree.
     expect(applyNode).not.toThrow()
   })
 })
 
-describe('ui-token-billing invariant companion', () => {
+describe('ui-token-usage invariant companion', () => {
   it('reserves package ownership under its declared companion name', async () => {
     const ctx = new Context()
     await ctx.plugin(InvariantRegistry, { enabled: true })
-    const fiber = ctx.plugin(TokenBillingInvariant)
+    const fiber = ctx.plugin(TokenUsageInvariant)
     await fiber.await()
-    expect(TokenBillingInvariant.name).toBe('client-ui-token-billing-invariant')
-    expect(TokenBillingInvariant.inject).toEqual(['invariants'])
+    expect(TokenUsageInvariant.name).toBe('client-ui-token-usage-invariant')
+    expect(TokenUsageInvariant.inject).toEqual(['invariants'])
     // Emitting an unrelated event proves the companion installed no audit.
     expect(() => { (ctx.emit as (event: string) => void)('slots/changed') }).not.toThrow()
     await fiber.dispose()

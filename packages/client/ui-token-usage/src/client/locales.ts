@@ -1,7 +1,7 @@
-/** `token-billing` namespace dictionaries. */
+/** `token-usage` namespace dictionaries. */
 
 /** Dictionary namespace owned by this plugin. */
-export const NS = 'token-billing'
+export const NS = 'token-usage'
 
 /** Simplified Chinese dictionary (the key-set source of truth). */
 export const zh = {
@@ -33,7 +33,7 @@ export const zh = {
 } as const
 
 /** English dictionary, key-identical to the Chinese source of truth. */
-export const en: Record<TokenBillingKey, string> = {
+export const en: Record<TokenUsageKey, string> = {
   'pill.aria': 'Today\'s token spend and account balance, click to refresh',
   'spent.today': 'Today {amount}',
   'spent.tokens': '{tokens} tok',
@@ -61,5 +61,5 @@ export const en: Record<TokenBillingKey, string> = {
   'go.tooltip.refresh': 'Click to refresh',
 }
 
-/** Key domain of the `token-billing` namespace (zh is the source of truth). */
-export type TokenBillingKey = keyof typeof zh
+/** Key domain of the `token-usage` namespace (zh is the source of truth). */
+export type TokenUsageKey = keyof typeof zh

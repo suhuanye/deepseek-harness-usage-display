@@ -1354,9 +1354,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-theme':
         specifier: workspace:^
         version: link:../../client/ui-theme
-      '@deepseek-ai/dsh-client-ui-token-billing':
+      '@deepseek-ai/dsh-client-ui-token-usage':
         specifier: workspace:^
-        version: link:../../client/ui-token-billing
+        version: link:../../client/ui-token-usage
       '@deepseek-ai/dsh-client-ui-tool':
         specifier: workspace:^
         version: link:../../client/ui-tool
@@ -2821,7 +2821,7 @@ importers:
         specifier: ^18.2.0
         version: 18.3.1
 
-  packages/client/ui-token-billing:
+  packages/client/ui-token-usage:
     dependencies:
       react:
         specifier: ^18.2.0

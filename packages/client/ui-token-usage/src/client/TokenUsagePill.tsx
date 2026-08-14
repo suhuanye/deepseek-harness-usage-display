@@ -1,5 +1,5 @@
 /**
- * Session-header token-billing readout: today's priced spend and the provider
+ * Session-header token-usage readout: today's priced spend and the provider
  * account balance, rendered in the right-aligned header utilities seat. The
  * host answers both figures through the apiproxy `billing` domain; this
  * component only fetches and displays. Data arrives on mount, refreshes on a
@@ -12,10 +12,10 @@ import type { BillingBalance, BillingTodayUsage, BillingTokenUsage } from '@deep
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { NS } from './locales.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import css from './TokenBillingPill.module.css'
+import css from './TokenUsagePill.module.css'
 
 /** One combined host answer for the pill. */
-export interface TokenBillingSnapshot {
+export interface TokenUsageSnapshot {
   /** Provider account balance; undefined when the deployment exposes none. */
   balance: BillingBalance | undefined
   /** Today's usage across sessions; undefined when the query failed. */
@@ -23,15 +23,15 @@ export interface TokenBillingSnapshot {
 }
 
 /** Business face injected into the pill: a single refresh trigger. */
-export interface TokenBillingInjected {
+export interface TokenUsageInjected {
   /** Fetch the latest balance and today usage in one round trip. */
-  refresh: () => Promise<TokenBillingSnapshot>
+  refresh: () => Promise<TokenUsageSnapshot>
 }
 
 /** Full props: runtime share + injected share + locale seat. */
-export type TokenBillingPillProps =
+export type TokenUsagePillProps =
   PropsRuntime<'conversation.session.header.utilities'>
-  & TokenBillingInjected
+  & TokenUsageInjected
   & PropsLocale<typeof NS>
 
 /** Quiet refresh cadence; a click always refreshes immediately. */
@@ -75,12 +75,12 @@ function officialTokenTotals(usage: BillingTodayUsage): BillingTokenUsage {
 }
 
 /**
- * Session-header entry point for the token-billing readout.
+ * Session-header entry point for the token-usage readout.
  * @param props - runtime slot currency, the refresh face, and the translator.
  * @returns the spend/balance pill, or null until the first answer arrives.
  */
-export function TokenBillingPill({ t, refresh }: TokenBillingPillProps) {
-  const [snapshot, setSnapshot] = useState<TokenBillingSnapshot | null>(null)
+export function TokenUsagePill({ t, refresh }: TokenUsagePillProps) {
+  const [snapshot, setSnapshot] = useState<TokenUsageSnapshot | null>(null)
   const [refreshedAt, setRefreshedAt] = useState<number | null>(null)
 
   const load = useCallback(async (): Promise<void> => {

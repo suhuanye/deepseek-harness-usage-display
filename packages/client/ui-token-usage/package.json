@@ -1,6 +1,6 @@
 {
-  "name": "@deepseek-ai/dsh-client-ui-token-billing",
-  "description": "Session-header token-billing readout: today's priced spend and the provider account balance in the header utilities seat",
+  "name": "@deepseek-ai/dsh-client-ui-token-usage",
+  "description": "Session-header usage display plugin: today's token usage and spend, the provider account balance, and the OpenCode Go subscription quota in the header utilities seat",
   "version": "0.1.0-rc.5",
   "type": "module",
   "main": "lib/index.js",
@@ -41,7 +41,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-    "directory": "packages/client/ui-token-billing"
+    "directory": "packages/client/ui-token-usage"
   },
   "publishConfig": {
     "access": "public"

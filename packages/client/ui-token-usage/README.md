@@ -1,10 +1,10 @@
-# @deepseek-ai/dsh-client-ui-token-billing
+# @deepseek-ai/dsh-client-ui-token-usage
 
 English | [中文](README.zh.md)
 
-Session-header billing readout: two entries in `conversation.session.header.utilities` in the top-right of the session header — today's priced token spend plus the provider account balance, and the OpenCode Go subscription quota. All figures come from the host's apiproxy `billing` domain (`billing.balance` + `billing.todayUsage` + `billing.goUsage`) through `ctx.connection.api`; this package holds no host state and the browser never sees an API key.
+Session-header usage display plugin: two entries in `conversation.session.header.utilities` in the top-right of the session header — today's token usage and priced spend plus the provider account balance, and the OpenCode Go subscription quota. All figures come from the host's apiproxy `billing` domain (`billing.balance` + `billing.todayUsage` + `billing.goUsage`) through `ctx.connection.api`; this package holds no host state and the browser never sees an API key.
 
-The spend pill renders nothing until the first answer arrives, then shows `今日 ¥x.xx · 余额 ¥y.yy` (preferring the CNY balance row, falling back to the first currency row, and a dash when the deployment exposes no balance). A click refreshes immediately; otherwise the figures refresh on a quiet 60-second timer, so a running conversation keeps the spend current without user action. Hovering shows the token buckets (input incl. cache reads/writes, output), a note when a route has no configured price, and the last refresh time.
+The usage pill renders nothing until the first answer arrives, then shows `今日 ¥x.xx · 余额 ¥y.yy` (preferring the CNY balance row, falling back to the first currency row, and a dash when the deployment exposes no balance). A click refreshes immediately; otherwise the figures refresh on a quiet 60-second timer, so a running conversation keeps the figures current without user action. Hovering shows the token buckets (input incl. cache reads/writes, output), a note when a route has no configured price, and the last refresh time.
 
 The GO pill shows the OpenCode Go plan's rolling (~5h) / weekly / monthly usage percentages, e.g. `GO · 5h 1% · 周 0% · 月 0%`, with each window's reset time on hover. It renders nothing when the deployment has no GO key configured or every window is degraded.
 
@@ -12,7 +12,7 @@ Pricing lives entirely on the host: the default table covers the DeepSeek offici
 
 ## Model Experience
 
-None, as this package renders host-computed billing facts for a human and touches no prompt, message, schema, stream, or tool result. The model's own cost accounting stays with the host's session logs and the `billing` domain.
+None, as this package renders host-computed usage and billing facts for a human and touches no prompt, message, schema, stream, or tool result. The model's own cost accounting stays with the host's session logs and the `billing` domain.
 
 #### KV Cache effect
 

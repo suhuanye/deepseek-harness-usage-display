@@ -239,8 +239,8 @@
 
     # Token billing: today's priced spend and the provider account balance in
     # the session-header utilities seat, over the host's billing domain.
-    - id: ui-token-billing
-      name: '@deepseek-ai/dsh-client-ui-token-billing'
+    - id: ui-token-usage
+      name: '@deepseek-ai/dsh-client-ui-token-usage'
 
     # Goal surface: GoalBar in the input dock over the goal session projection.
     - id: ui-goal

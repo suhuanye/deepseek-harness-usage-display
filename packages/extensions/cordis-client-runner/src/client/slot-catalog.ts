@@ -960,8 +960,8 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     slotInject: '',
     declaredBy: 'an entry in \'conversation.session.header\' (client-ui-conversation), so it exists while that entry is mounted',
     occupants: [
-      'client-ui-token-billing TokenBillingPill id \'token-billing\'',
-      'client-ui-token-billing GoUsagePill id \'opencode-go\'',
+      'client-ui-token-usage TokenUsagePill id \'token-usage\'',
+      'client-ui-token-usage GoUsagePill id \'opencode-go\'',
       'session-log-export SessionLogDownloadHeaderAction id \'session-log-download\'',
     ],
     replaceRisk: 'none',
