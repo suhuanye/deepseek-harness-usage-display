@@ -17,7 +17,7 @@ import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type { ApiProxy } from './api/index.ts'
 import {
-  createApiProxy, DEFAULT_COLD_BLANK_PROBE_MAX_BYTES,
+  createApiProxy, DEFAULT_BILLING_USAGE_CACHE_MS, DEFAULT_COLD_BLANK_PROBE_MAX_BYTES,
   type BillingModelPrice,
 } from './api-proxy.ts'
 import {
@@ -32,7 +32,7 @@ export { AbstractApiClient, InProcessApiClient } from './fetch/client.ts'
 export type { IApiClient } from './fetch/client.ts'
 export { createApiProxy } from './api-proxy.ts'
 export type { ApiProxyDefaults } from './api-proxy.ts'
-export { DEFAULT_BILLING_PRICES, DEFAULT_GO_API_KEY_ENV } from './api-proxy.ts'
+export { DEFAULT_BILLING_PRICES, DEFAULT_BILLING_USAGE_CACHE_MS, DEFAULT_GO_API_KEY_ENV } from './api-proxy.ts'
 export type { BillingModelPrice } from './api-proxy.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -76,6 +76,14 @@ export interface Config {
    * {@link DEFAULT_GO_API_KEY_ENV}.
    */
   goApiKeyEnv?: string
+  /**
+   * Freshness window for the billing domain's same-day usage aggregation.
+   * Within it, `billing.todayUsage` and the OpenCode Go token figure answer
+   * from one memoized scan per local day instead of rescanning every session
+   * log; zero disables the memo.
+   * @default {@link DEFAULT_BILLING_USAGE_CACHE_MS}
+   */
+  billingUsageCacheMs?: number
 }
 
 /**
@@ -102,6 +110,7 @@ export class ApiProxyService extends Service implements ApiProxy {
       outputPerMillion: z.number().min(0),
     })),
     goApiKeyEnv: z.string().role('credential-ref'),
+    billingUsageCacheMs: z.natural().default(DEFAULT_BILLING_USAGE_CACHE_MS),
   })
 
   readonly sessions: ApiProxy['sessions']
@@ -136,6 +145,7 @@ export class ApiProxyService extends Service implements ApiProxy {
         ? {}
         : { billingPrices: config.billingPrices }),
       ...(config.goApiKeyEnv === undefined ? {} : { goApiKeyEnv: config.goApiKeyEnv }),
+      ...(config.billingUsageCacheMs === undefined ? {} : { billingUsageCacheMs: config.billingUsageCacheMs }),
     })
     this.sessions = api.sessions
     this.subagents = api.subagents

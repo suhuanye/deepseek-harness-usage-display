@@ -8,7 +8,7 @@ The usage pill renders nothing until the first answer arrives, then shows `今�
 
 The GO pill shows the OpenCode Go plan's rolling (~5h) / weekly / monthly usage percentages, e.g. `GO · 5h 1% · 周 0% · 月 0%`, with each window's reset time on hover. It renders nothing when the deployment has no GO key configured or every window is degraded.
 
-Pricing lives entirely on the host: the default table covers the DeepSeek official catalog (see `DEFAULT_BILLING_PRICES` in `dsh-host-apiproxy`), and deployments override it through the gateway's `billingPrices` config. A model without a price entry still reports its token counts, flagged through the `unpriced` bit, so the yuan figure never silently understates. The GO key resolves from the credentials seam through `OPENCODE_GO_API_KEY` (overridable via the gateway's `goApiKeyEnv` config) and is queried against the plan's official `https://opencode.ai/zen/go/v1/usage` endpoint.
+Pricing lives entirely on the host: the default table covers the DeepSeek official catalog (see `DEFAULT_BILLING_PRICES` in `dsh-host-apiproxy`), and deployments override it through the gateway's `billingPrices` config. A model without a price entry still reports its token counts, flagged through the `unpriced` bit, so the yuan figure never silently understates. The GO key resolves from the credentials seam through `OPENCODE_GO_API_KEY` (overridable via the gateway's `goApiKeyEnv` config) and is queried against the plan's official `https://opencode.ai/zen/go/v1/usage` endpoint. Same-day aggregation rescans every session log at most once per `billingUsageCacheMs` (default 5 minutes); `billing.todayUsage` and the GO token figure share one memoized answer per local day, so repeated refreshes are answered instantly.
 
 ## Model Experience
 
@@ -20,6 +20,6 @@ None; the package never assembles or sends provider requests. It only reads host
 
 ## Known Limitations and Deferred Work
 
-- **The today window is local midnight to now** — the aggregation re-derives it from committed session logs on every query; it is a display figure, not a billing record, and a provider's official invoice remains authoritative.
+- **The today window is local midnight to now** — the aggregation re-derives it from committed session logs and serves it from a per-local-day memo for `billingUsageCacheMs` (default 5 minutes); it is a display figure, not a billing record, and a provider's official invoice remains authoritative.
 - **Prices are configured on the host** — the defaults are the DeepSeek official rates as published; DeepSeek announced peak/off-peak pricing effective 2026-08-17, and deployments on the new rates should set `billingPrices` accordingly (the gateway schema accepts arbitrary provider/model routes).
 - **The pill is per-session chrome** — it remounts (and re-fetches) on session switch and is hidden while no session header renders; a frame-wide always-visible home would be a new shell slot.

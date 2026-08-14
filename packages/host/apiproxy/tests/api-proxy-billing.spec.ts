@@ -209,6 +209,105 @@ describe('billing.todayUsage', () => {
   })
 })
 
+describe('billing usage cache', () => {
+  it('serves a memoized answer within the freshness window and rescans after it expires', async () => {
+    const { ctx, api } = await harness({
+      proxy: { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp', billingUsageCacheMs: 60_000 },
+    })
+    vi.useFakeTimers()
+    const session = ctx.sessions.create()
+    appendUsage(session, {
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      usage: { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    })
+    const first = expectOk(await api.billing.todayUsage(request({}))).usage
+    expect(first.tokens.inputTokens).toBe(1_000_000)
+
+    // New events land after the scan: the memoized answer stays until expiry.
+    appendUsage(session, {
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      usage: { inputTokens: 2_000_000, outputTokens: 0 },
+    })
+    const cached = expectOk(await api.billing.todayUsage(request({}))).usage
+    expect(cached.tokens.inputTokens).toBe(1_000_000)
+
+    vi.advanceTimersByTime(60_000)
+    const fresh = expectOk(await api.billing.todayUsage(request({}))).usage
+    expect(fresh.tokens.inputTokens).toBe(3_000_000)
+    vi.useRealTimers()
+  })
+
+  it('recomputes at local midnight even inside the freshness window', async () => {
+    const { ctx, api } = await harness({
+      proxy: { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp', billingUsageCacheMs: 300_000 },
+    })
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-14T23:59:00'))
+    const session = ctx.sessions.create()
+    appendUsage(session, {
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      usage: { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    })
+    const first = expectOk(await api.billing.todayUsage(request({}))).usage
+    expect(first.tokens.inputTokens).toBe(1_000_000)
+
+    // Next local day, still within the window: the day key forces a rescan.
+    vi.setSystemTime(new Date('2026-08-15T00:00:30'))
+    const nextDay = expectOk(await api.billing.todayUsage(request({}))).usage
+    expect(nextDay.tokens.inputTokens).toBe(0)
+    vi.useRealTimers()
+  })
+
+  it('shares one memo between todayUsage and the OpenCode Go token figure', async () => {
+    const { ctx, api } = await harness({
+      proxy: { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp', billingUsageCacheMs: 60_000 },
+    })
+    ctx.get('credentials')?.set(credentialRef('OPENCODE_GO_API_KEY'), 'sk-go')
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down') }))
+    vi.useFakeTimers()
+    const session = ctx.sessions.create()
+    appendUsage(session, {
+      provider: 'opencode-go',
+      model: 'deepseek-v4-flash',
+      usage: { inputTokens: 1_000_000, outputTokens: 200_000 },
+    })
+    const go = expectOk(await api.billing.goUsage(request({}))).usage
+    expect(go?.tokens?.inputTokens).toBe(1_000_000)
+
+    // A later todayUsage query reuses the GO pill's scan, not a fresh one.
+    appendUsage(session, {
+      provider: 'opencode-go',
+      model: 'deepseek-v4-flash',
+      usage: { inputTokens: 500_000, outputTokens: 0 },
+    })
+    const cached = expectOk(await api.billing.todayUsage(request({}))).usage
+    expect(cached.tokens.inputTokens).toBe(1_000_000)
+    vi.useRealTimers()
+  })
+
+  it('recomputes on every query when the cache window is zero', async () => {
+    const { ctx, api } = await harness({
+      proxy: { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp', billingUsageCacheMs: 0 },
+    })
+    const session = ctx.sessions.create()
+    appendUsage(session, {
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      usage: { inputTokens: 1_000_000, outputTokens: 0 },
+    })
+    expect(expectOk(await api.billing.todayUsage(request({}))).usage.tokens.inputTokens).toBe(1_000_000)
+    appendUsage(session, {
+      provider: 'deepseek-official',
+      model: 'deepseek-v4-flash',
+      usage: { inputTokens: 1_000_000, outputTokens: 0 },
+    })
+    expect(expectOk(await api.billing.todayUsage(request({}))).usage.tokens.inputTokens).toBe(2_000_000)
+  })
+})
+
 describe('billing.balance', () => {
   it('answers undefined when the deployment has no credentials seam', async () => {
     const { api } = await harness({ credentials: false })

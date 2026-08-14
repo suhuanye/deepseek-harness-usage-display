@@ -422,6 +422,15 @@ export const DEFAULT_BILLING_PRICES: readonly BillingModelPrice[] = [
   { provider: 'deepseek-official', model: 'deepseek-reasoner', inputCacheMissPerMillion: 4, inputCacheHitPerMillion: 1, outputPerMillion: 16 },
 ]
 
+/**
+ * Freshness window for the billing domain's same-day usage aggregation.
+ * Aggregating scans every session log, so within this window a query returns
+ * the previous answer instead of rescanning; `billing.todayUsage` and the
+ * OpenCode Go token figure share one memo per local day. Zero disables the
+ * memo entirely.
+ */
+export const DEFAULT_BILLING_USAGE_CACHE_MS = 300_000
+
 /** Index a price table by its `provider/model` key. */
 function billingPriceTable(prices: readonly BillingModelPrice[]): ReadonlyMap<string, BillingModelPrice> {
   const table = new Map<string, BillingModelPrice>()
@@ -1029,6 +1038,14 @@ export interface ApiProxyDefaults {
    * {@link DEFAULT_GO_API_KEY_ENV}.
    */
   goApiKeyEnv?: string
+  /**
+   * Freshness window for the billing domain's same-day usage aggregation.
+   * Within it, `billing.todayUsage` and the OpenCode Go token figure answer
+   * from one memoized scan per local day instead of rescanning every session
+   * log; zero disables the memo.
+   * @default {@link DEFAULT_BILLING_USAGE_CACHE_MS}
+   */
+  billingUsageCacheMs?: number
 }
 
 /** The tool/call payload fields the presenter path reads. */
@@ -1472,6 +1489,25 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     ?? DEFAULT_COLD_BLANK_PROBE_MAX_BYTES
   const billingPrices = defaults.billingPrices ?? DEFAULT_BILLING_PRICES
   const goApiKeyEnv = defaults.goApiKeyEnv ?? DEFAULT_GO_API_KEY_ENV
+  const billingUsageCacheMs = defaults.billingUsageCacheMs ?? DEFAULT_BILLING_USAGE_CACHE_MS
+  /**
+   * Memoized same-day usage aggregation, keyed by local-day start. The scan
+   * reads every session log, so both billing rows share one answer per
+   * {@link DEFAULT_BILLING_USAGE_CACHE_MS}; a query within the window returns
+   * the previous answer, and local midnight or TTL expiry recomputes it.
+   */
+  let usageCache: { since: number; at: number; usage: BillingTodayUsage } | undefined
+  const cachedTodayUsage = async (signal?: AbortSignal): Promise<BillingTodayUsage> => {
+    const since = startOfLocalDay(Date.now())
+    const at = Date.now()
+    const hit = usageCache
+    if (hit !== undefined && hit.since === since && at - hit.at < billingUsageCacheMs) {
+      return hit.usage
+    }
+    const usage = await aggregateTodayUsage(ctx, since, billingPriceTable(billingPrices), signal)
+    usageCache = { since, at, usage }
+    return usage
+  }
   /** The seed model each create/resume declares; re-read so it never goes stale. */
   const agentOptions = (): AgentOptions => {
     const { provider, model } = defaults.defaultModelSelection()
@@ -3798,12 +3834,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
       async todayUsage(request, signal) {
         try {
-          const usage = await aggregateTodayUsage(
-            ctx,
-            startOfLocalDay(Date.now()),
-            billingPriceTable(billingPrices),
-            signal,
-          )
+          const usage = await cachedTodayUsage(signal)
           return ok(request, { usage })
         } catch (error: unknown) {
           if (signal !== undefined && isAborted(signal)) {
@@ -3827,12 +3858,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const plan = await queryGoUsage(ctx, goApiKeyEnv, signal)
         const usage: BillingGoUsage = { ...plan }
         try {
-          const today = await aggregateTodayUsage(
-            ctx,
-            startOfLocalDay(Date.now()),
-            billingPriceTable(billingPrices),
-            signal,
-          )
+          const today = await cachedTodayUsage(signal)
           const goRows = today.byModel.filter(row => row.provider === GO_PROVIDER)
           if (goRows.length > 0) {
             usage.tokens = goRows.reduce((total, row) => ({
